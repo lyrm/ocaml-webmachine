@@ -21,7 +21,7 @@
     THIS SOFTWARE IS PROVIDED BY THE CONTRIBUTORS ``AS IS'' AND ANY EXPRESS
     OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
     WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-    DISCLAIMED.  IN NO EVENT SHALL THE AUTHORS OR CONTRIBUTORS BE LIABLE FOR
+    DISCLAIMED.  IN NO EVENT SHALL THE AUTHORS OR BE CONTRIBUTORS LIABLE FOR
     ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
     DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
     OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
@@ -31,7 +31,7 @@
     POSSIBILITY OF SUCH DAMAGE.
   ----------------------------------------------------------------------------*)
 
-open Cohttp
+open HttpCohttp.HttpCohttp
 
 module Util = Wm_util
 
@@ -44,8 +44,8 @@ end
 
 module Rd = struct
   type 'body t =
-    { version       : Code.version
-    ; meth          : Code.meth
+    { version       : Version.t
+    ; meth          : Method.t
     ; uri           : Uri.t
     ; req_headers   : Header.t
     ; req_body      : 'body
@@ -62,7 +62,7 @@ module Rd = struct
       ?(resp_headers=Header.init ()) ?(resp_body=`Empty) ?(resp_redirect=false)
       ?(req_body=`Empty) ~request ()
     =
-    { uri     = Uri.of_string request.Request.resource
+    { uri     = Uri.of_string (request.Request.resource)
     ; version = request.Request.version
     ; meth    = request.Request.meth
     ; req_headers = request.Request.headers
@@ -132,8 +132,8 @@ module type S = sig
     method valid_content_headers : (bool, 'body) op
     method valid_entity_length : (bool, 'body) op
     method options : ((string * string) list, 'body) op
-    method allowed_methods : (Code.meth list, 'body) op
-    method known_methods : (Code.meth list, 'body) op
+    method allowed_methods : (Method.t list, 'body) op
+    method known_methods : (Method.t list, 'body) op
     method delete_resource : (bool, 'body) op
     method delete_completed : (bool, 'body) op
     method process_post : (bool, 'body) op
@@ -155,17 +155,17 @@ module type S = sig
   val to_handler :
     ?dispatch_path:string -> ?path_info:(string * string) list ->
     resource:('body resource) -> body:'body -> request:Request.t -> unit ->
-    (Code.status_code * Header.t * 'body * string list) io
+    (Status.t * Header.t * 'body * string list) io
 
   val dispatch :
     ((Dispatch.tag * string) list * Dispatch.typ * (unit -> 'body resource)) list ->
     body:'body -> request:Request.t ->
-    (Code.status_code * Header.t * 'body * string list) option io
+    (Status.t * Header.t * 'body * string list) option io
 
   val dispatch' :
     (string * (unit -> 'body resource)) list ->
     body:'body -> request:Request.t ->
-    (Code.status_code * Header.t * 'body * string list) option io
+    (Status.t * Header.t * 'body * string list) option io
 end
 
 let default_variances =
@@ -239,10 +239,10 @@ module Make(IO:IO)(Clock:CLOCK) = struct
       continue true rd
     method options (rd :'body Rd.t) : ((string * string) list result * 'body Rd.t) IO.t =
       self#allowed_methods rd >>=? fun meths rd ->
-      continue ["allow", String.concat "," (List.map Code.string_of_method meths)] rd
-    method allowed_methods (rd :'body Rd.t) : (Code.meth list result * 'body Rd.t) IO.t =
+      continue ["allow", String.concat "," (List.map Method.to_string meths)] rd
+    method allowed_methods (rd :'body Rd.t) : (Method.t list result * 'body Rd.t) IO.t =
       continue [ `GET; `HEAD ] rd
-    method known_methods (rd :'body Rd.t) : (Code.meth list result * 'body Rd.t) IO.t =
+    method known_methods (rd :'body Rd.t) : (Method.t list result * 'body Rd.t) IO.t =
       continue [`GET; `HEAD; `POST; `PUT; `DELETE; `Other "TRACE"; `Other "CONNECT"; `OPTIONS] rd
     method delete_resource (rd :'body Rd.t) : (bool result * 'body Rd.t) IO.t =
       continue false rd
@@ -312,7 +312,7 @@ module Make(IO:IO)(Clock:CLOCK) = struct
       in
       rd <- { rd with Rd.resp_body = ef (cf rd.Rd.resp_body) }
 
-    (** [#meth] returns the [Code.meth] of the [Request.t] object. *)
+    (** [#meth] returns the [Method.t] of the [Request.t] object. *)
     method private meth =
       rd.Rd.meth
 
@@ -328,7 +328,7 @@ module Make(IO:IO)(Clock:CLOCK) = struct
     method private is_redirect =
       rd.Rd.resp_redirect
 
-    method private respond ~status ?body () : (Code.status_code * Header.t * 'body) IO.t =
+    method private respond ~status ?body () : (Status.t * Header.t * 'body) IO.t =
       let body =
         match body with
         | None -> rd.Rd.resp_body
@@ -337,8 +337,8 @@ module Make(IO:IO)(Clock:CLOCK) = struct
       self#run_op resource#finish_request
       >>~ fun () -> return (status, rd.Rd.resp_headers, body)
 
-    method private halt code : (Code.status_code * Header.t * 'body) IO.t =
-      let status = Code.status_of_code code in
+    method private halt code : (Status.t * Header.t * 'body) IO.t =
+      let status = Status.of_code code in
       self#respond ~status ()
 
     method private choose_charset acceptable k =
@@ -395,7 +395,7 @@ module Make(IO:IO)(Clock:CLOCK) = struct
     (** [run_op op] runs [op] with the current request and response
         information, and will perform any appropriate bookkeeping that needs to
         be done given the result. *)
-    method private run_op : 'a. ('a, 'body) op -> ('a -> (Code.status_code * Header.t * 'body) IO.t) -> (Code.status_code * Header.t * 'body) IO.t =
+    method private run_op : 'a. ('a, 'body) op -> ('a -> (Status.t * Header.t * 'body) IO.t) -> (Status.t * Header.t * 'body) IO.t =
       fun op k -> op rd
         >>= function
           | Ok a, rd' ->
@@ -405,7 +405,7 @@ module Make(IO:IO)(Clock:CLOCK) = struct
             rd <- rd';
             self#halt n
 
-    method private run_provider : 'body provider -> _ -> (Code.status_code * Header.t * 'body) IO.t =
+    method private run_provider : 'body provider -> _ -> (Status.t * Header.t * 'body) IO.t =
       fun provider k ->
         provider rd
         >>= function
@@ -436,53 +436,53 @@ module Make(IO:IO)(Clock:CLOCK) = struct
     method private d state =
       path <- state :: path
 
-    method run : (Code.status_code * Header.t * 'body * string list) IO.t =
+    method run : (Status.t * Header.t * 'body * string list) IO.t =
       self#v3b13 >>= fun (code, headers, body) -> return (code, headers, body, List.rev path)
 
-    method v3b13 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3b13 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3b13";
       self#run_op resource#service_available
       >>~ function
         | true  -> self#v3b12
         | false -> self#halt 503
 
-    method v3b12 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3b12 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3b12";
       let meth = self#meth in
       self#run_op resource#known_methods
-      >>~ fun (meths:Code.meth list) ->
-        if List.exists (fun x -> Code.compare_method meth x = 0) meths
+      >>~ fun (meths:Method.t list) ->
+        if List.exists (fun x -> Method.compare meth x = 0) meths
           then self#v3b11
           else self#halt 501
 
-    method v3b11 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3b11 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3b11";
       self#run_op resource#uri_too_long
       >>~ function
         | true  -> self#halt 414
         | false -> self#v3b10
 
-    method v3b10 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3b10 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3b10";
       let meth = self#meth in
       self#run_op resource#allowed_methods
-      >>~ fun (meths:Code.meth list) ->
-        if List.exists (fun x -> Code.compare_method meth x = 0) meths then
+      >>~ fun (meths:Method.t list) ->
+        if List.exists (fun x -> Method.compare meth x = 0) meths then
           self#v3b9
         else begin
-          let allow = String.concat "," (List.map Code.string_of_method meths) in
+          let allow = String.concat "," (List.map Method.to_string meths) in
           self#set_response_header "allow" allow;
           self#halt 405
         end
 
-    method v3b9 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3b9 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3b9";
       self#run_op resource#malformed_request
       >>~ function
         | true  -> self#halt 400
         | false -> self#v3b8
 
-    method v3b8 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3b8 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3b8";
       self#run_op resource#is_authorized
       >>~ function
@@ -511,35 +511,35 @@ module Make(IO:IO)(Clock:CLOCK) = struct
           rd <- Rd.redirect Uri.(to_string uri) rd;
           self#halt 303
 
-    method v3b7 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3b7 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3b7";
       self#run_op resource#forbidden
       >>~ function
         | true  -> self#halt 403
         | false -> self#v3b6
 
-    method v3b6 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3b6 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3b6";
       self#run_op resource#valid_content_headers
       >>~ function
         | true  -> self#v3b5
         | false -> self#halt 501
 
-    method v3b5 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3b5 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3b5";
       self#run_op resource#known_content_type
       >>~ function
         | true  -> self#v3b4
         | false -> self#halt 415
 
-    method v3b4 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3b4 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3b4";
       self#run_op resource#valid_entity_length
       >>~ function
         | true  -> self#v3b3
         | false -> self#halt 413
 
-    method v3b3 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3b3 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3b3";
       match self#meth with
       | `OPTIONS ->
@@ -549,7 +549,7 @@ module Make(IO:IO)(Clock:CLOCK) = struct
           self#respond ~status:`OK ()
       | _ -> self#v3c3
 
-    method v3c3 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3c3 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3c3";
       self#run_op resource#content_types_provided
       >>~ fun content_types ->
@@ -563,7 +563,7 @@ module Make(IO:IO)(Clock:CLOCK) = struct
           end
         | Some _ -> self#v3c4
 
-    method v3c4 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3c4 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3c4";
       self#run_op resource#content_types_provided
       >>~ fun content_types ->
@@ -574,20 +574,20 @@ module Make(IO:IO)(Clock:CLOCK) = struct
           content_type <- Some t;
           self#v3d4
 
-    method v3d4 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3d4 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3d4";
       match self#get_request_header "accept-language" with
       | None   -> self#v3e5
       | Some _ -> self#v3d5
 
-    method v3d5 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3d5 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3d5";
       self#run_op resource#language_available
       >>~ function
         | true  -> self#v3e5
         | false -> self#halt 406
 
-    method v3e5 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3e5 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3e5";
       match self#get_request_header "accept-charset" with
       | None   ->
@@ -599,7 +599,7 @@ module Make(IO:IO)(Clock:CLOCK) = struct
         end
       | Some _ -> self#v3e6
 
-    method v3e6 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3e6 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3e6";
       match self#get_request_header "accept-charset" with
       | None            -> assert false
@@ -611,7 +611,7 @@ module Make(IO:IO)(Clock:CLOCK) = struct
           | `One None     -> self#halt 406
         end
 
-    method v3f6 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3f6 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3f6";
       let type_ =
         match content_type with
@@ -634,7 +634,7 @@ module Make(IO:IO)(Clock:CLOCK) = struct
         end
       | Some _ -> self#v3f7
 
-    method v3f7 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3f7 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3f7";
       match self#get_request_header "accept-encoding" with
       | None            -> assert false
@@ -646,7 +646,7 @@ module Make(IO:IO)(Clock:CLOCK) = struct
         | Some _ -> self#v3g7
         end
 
-    method v3g7 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3g7 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3g7";
       self#run_op resource#variances >>~ fun variances ->
       let variances = variances @ default_variances in
@@ -659,20 +659,20 @@ module Make(IO:IO)(Clock:CLOCK) = struct
         | true  -> self#v3g8
         | false -> self#v3h7
 
-    method v3g8 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3g8 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3g8";
       match self#get_request_header "if-match" with
       | None   -> self#v3h10
       | Some _ -> self#v3g9
 
-    method v3g9 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3g9 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3g9";
       match self#get_request_header "if-match" with
       | None     -> assert false
       | Some "*" -> self#v3h10
       | Some _   -> self#v3g11
 
-    method v3g11 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3g11 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3g11";
       match self#get_request_header "if-match" with
       | None      -> assert false
@@ -686,19 +686,19 @@ module Make(IO:IO)(Clock:CLOCK) = struct
           | false -> self#halt 412
           end
 
-    method v3h7 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3h7 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3h7";
       match self#get_request_header "if-match" with
       | None   -> self#v3i7
       | Some _ -> self#halt 412
 
-    method v3h10 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3h10 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3h10";
       match self#get_request_header "if-unmodified-since" with
       | None   -> self#v3i12
       | Some _ -> self#v3h11
 
-    method v3h11 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3h11 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3h11";
       let d = self#get_request_header "if-unmodified-since" in
       match d with
@@ -708,7 +708,7 @@ module Make(IO:IO)(Clock:CLOCK) = struct
          | None -> self#v3i12
          | Some _ -> self#v3h12
 
-    method v3h12 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3h12 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3h12";
       try
         let u_mod = self#get_request_header "if-unmodified-since" in
@@ -723,7 +723,7 @@ module Make(IO:IO)(Clock:CLOCK) = struct
       with
         Invalid_argument _ -> self#halt 412
 
-    method v3i4 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3i4 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3i4";
       self#run_op resource#moved_permanently
       >>~ function
@@ -732,34 +732,34 @@ module Make(IO:IO)(Clock:CLOCK) = struct
           self#set_response_header "Location" (Uri.to_string uri);
           self#respond ~status:`Moved_permanently ()
 
-    method v3i7 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3i7 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3i7";
       match self#meth with
       | `OPTIONS -> assert false
       | `PUT     -> self#v3i4
       | _        -> self#v3k7
 
-    method v3i12 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3i12 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3i12";
       match self#get_request_header "if-none-match" with
       | None   -> self#v3l13
       | Some _ -> self#v3i13
 
-    method v3i13 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3i13 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3i13";
       match self#get_request_header "if-none-match" with
       | None     -> assert false
       | Some "*" -> self#v3j18
       | Some _   -> self#v3k13
 
-    method v3k7 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3k7 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3k7";
       self#run_op resource#previously_existed
       >>~ function
         | true  -> self#v3k5
         | false -> self#v3l7
 
-    method v3k5 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3k5 : (Status.t * Header.t * 'body) IO.t =
       (* XXX(seliopou): For now, no POSTs to non-existent resources allowed. *)
       self#d "v3k5";
       self#run_op resource#moved_permanently
@@ -769,7 +769,7 @@ module Make(IO:IO)(Clock:CLOCK) = struct
           self#set_response_header "location" (Uri.to_string uri);
           self#respond ~status:`Moved_permanently ()
 
-    method v3k13 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3k13 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3k13";
       match self#get_request_header "if-none-match" with
       | None      -> assert false
@@ -783,7 +783,7 @@ module Make(IO:IO)(Clock:CLOCK) = struct
           | false -> self#v3l13
           end
 
-    method v3l5 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3l5 : (Status.t * Header.t * 'body) IO.t =
       (* XXX(seliopou): For now, no POSTs to non-existent resources allowed. *)
       self#d "v3l5";
       self#run_op resource#moved_temporarily
@@ -793,20 +793,20 @@ module Make(IO:IO)(Clock:CLOCK) = struct
           self#set_response_header "location" (Uri.to_string uri);
           self#respond ~status:`Temporary_redirect ()
 
-    method v3l7 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3l7 : (Status.t * Header.t * 'body) IO.t =
       (* XXX(seliopou): For now, no POSTs to non-existent resources allowed. *)
       self#d "v3l7";
       match self#meth with
       | `OPTIONS -> assert false
       | _        -> self#halt 404
 
-    method v3l13 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3l13 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3l13";
       match self#get_request_header "if-modified-since" with
       | None   -> self#v3m16
       | Some _ -> self#v3l14
 
-    method v3l14 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3l14 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3l14";
       match (self#get_request_header "if-modified-since") with
       | None -> self#v3m16
@@ -815,7 +815,7 @@ module Make(IO:IO)(Clock:CLOCK) = struct
          | Some _ -> self#v3l15
          | None ->  self#v3m16
 
-    method v3l15 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3l15 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3l15";
       let now = Clock.now () in
       match (self#get_request_header "if-modified-since") with
@@ -827,7 +827,7 @@ module Make(IO:IO)(Clock:CLOCK) = struct
                      | true -> self#v3m16
                      | false -> self#v3l17
 
-    method v3l17 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3l17 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3l17";
       try
         let u_mod = self#get_request_header "if-modified-since" in
@@ -842,20 +842,20 @@ module Make(IO:IO)(Clock:CLOCK) = struct
       with
         Invalid_argument _ -> self#halt 304
 
-    method v3j18 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3j18 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3j18";
       match self#meth with
       | `GET | `HEAD -> self#halt 304
       | _            -> self#halt 412
 
-    method v3m16 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3m16 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3m16";
       match self#meth with
       | `OPTIONS -> assert false
       | `DELETE  -> self#v3m20
       | _        -> self#v3n16
 
-    method v3m20 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3m20 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3m20";
       self#run_op resource#delete_resource
       >>~ fun deleted ->
@@ -867,7 +867,7 @@ module Make(IO:IO)(Clock:CLOCK) = struct
         else
           self#halt 500
 
-    method v3n11 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3n11 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3n11";
       self#run_op resource#process_post
       >>~ fun executed ->
@@ -882,28 +882,28 @@ module Make(IO:IO)(Clock:CLOCK) = struct
         end else
           self#halt 500
 
-    method v3n16 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3n16 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3n16";
       match self#meth with
       | `OPTIONS | `DELETE -> assert false
       | `POST -> self#v3n11
       | _     -> self#v3o16
 
-    method v3o14 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3o14 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3o14";
       self#run_op resource#is_conflict
       >>~ function
         | true  -> self#halt 409
         | false -> self#accept_helper (fun _ -> self#v3p11)
 
-    method v3o16 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3o16 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3o16";
       match self#meth with
       | `OPTIONS | `DELETE | `POST -> assert false
       | `PUT -> self#v3o14
       | _    -> self#v3o18
 
-    method v3o18 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3o18 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3o18";
       match self#meth with
       (* The HTTP method could be POST if the request comes via v3o20 *)
@@ -927,26 +927,26 @@ module Make(IO:IO)(Clock:CLOCK) = struct
       | _ ->
         self#v3o18b
 
-    method v3o18b :(Code.status_code * Header.t * 'body) IO.t =
+    method v3o18b :(Status.t * Header.t * 'body) IO.t =
       self#run_op resource#multiple_choices
       >>~ function
         | true  -> self#halt 300
         | false -> self#respond ~status:`OK ()
 
-    method v3o20 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3o20 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3o20";
       match rd.Rd.resp_body with
       | `Empty -> self#respond ~status:`No_content ()
       | _      -> self#v3o18
 
-    method v3p3 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3p3 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3p3";
       self#run_op resource#is_conflict
       >>~ function
         | true  -> self#halt 409
         | false -> self#accept_helper (fun _ -> self#v3p11)
 
-    method v3p11 : (Code.status_code * Header.t * 'body) IO.t =
+    method v3p11 : (Status.t * Header.t * 'body) IO.t =
       self#d "v3p11";
       match self#get_response_header "location" with
       | None   -> self#v3o20
@@ -967,7 +967,7 @@ module Make(IO:IO)(Clock:CLOCK) = struct
       table
     in
     fun ~body ~request ->
-      let path = Uri.path (Cohttp.Request.uri request) in
+      let path = Uri.path (Request.uri request) in
       match Dispatch.dispatch table path with
       | Result.Error _    -> return None
       | Result.Ok handler -> handler ~body ~request >>= fun x -> return (Some x)

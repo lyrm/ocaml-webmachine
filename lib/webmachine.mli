@@ -41,7 +41,7 @@
     and a {{!CLOCK}[CLOCK]} module, and subclass the
     {{!classtype:S.resource}resouce} virtual class. *)
 
-open Cohttp
+open HttpCohttp.HttpCohttp
 
 (** The [IO] module signature abstracts over monadic futures library. It is a
     much reduced version of the module signature that appears in Cohttp, and as
@@ -62,8 +62,8 @@ end
     request-specific information. *)
 module Rd : sig
   type 'body t =
-    { version       : Code.version
-    ; meth          : Code.meth
+    { version       : Version.t
+    ; meth          : Method.t
     ; uri           : Uri.t
     ; req_headers   : Header.t
     ; req_body      : 'body
@@ -189,13 +189,13 @@ module type S = sig
 
         {i Default}: [\[("allow", self#allowed_methods)\]] *)
 
-    method known_methods : (Code.meth list, 'body) op
+    method known_methods : (Method.t list, 'body) op
     (** A request to this resource whose method is not included in the returned
         list will result in a [501 Not Implemented].
 
         {i Default}: [\[`GET; `HEAD; `POST; `PUT; `DELETE; `Other "TRACE"; `Other "CONNECT"; `OPTIONS\]] *)
 
-    method allowed_methods : (Code.meth list, 'body) op
+    method allowed_methods : (Method.t list, 'body) op
     (** A request to this resource whose method is not included in the returned
         list will result in a [405 Method Not Allowed]. The response will
         include an ["allow"] header that lists the allowed methods.
@@ -268,7 +268,7 @@ module type S = sig
   val to_handler :
     ?dispatch_path:string -> ?path_info:(string * string) list ->
     resource:('body resource) -> body:'body -> request:Request.t -> unit ->
-    (Code.status_code * Header.t * 'body * string list) io
+    (Status.t * Header.t * 'body * string list) io
   (** [to_handler ~resource ~body ~request ()] runs the resource through the
       HTTP decision diagram given [body] and [request]. The result is a tuple
       that contains the status code, headers and body of the response. The
@@ -278,7 +278,7 @@ module type S = sig
   val dispatch :
     ((Dispatch.tag * string) list * Dispatch.typ * (unit -> 'body resource)) list ->
     body:'body -> request:Request.t ->
-    (Code.status_code * Header.t * 'body * string list) option io
+    (Status.t * Header.t * 'body * string list) option io
   (** [dispatch routes] returns a request handler that will iterate through
       [routes] and dispatch the request to the first resources that matches the
       URI path. The form that the individal route entries takes this the
@@ -301,7 +301,7 @@ module type S = sig
   val dispatch' :
     (string * (unit -> 'body resource)) list ->
     body:'body -> request:Request.t ->
-    (Code.status_code * Header.t * 'body * string list) option io
+    (Status.t * Header.t * 'body * string list) option io
   (** [dispatch' routes ~body ~request] works in the same way as {dispatch'}
       except the user can specify path patterns using a string shorthand. For
       example, the following route entry:
