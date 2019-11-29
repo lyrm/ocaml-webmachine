@@ -41,7 +41,7 @@
     and a {{!CLOCK}[CLOCK]} module, and subclass the
     {{!classtype:S.resource}resouce} virtual class. *)
 
-open HttpCohttp.HttpCohttp
+open Httpadapter.HttpCohttp.HttpCohttp
 
 (** The [IO] module signature abstracts over monadic futures library. It is a
     much reduced version of the module signature that appears in Cohttp, and as

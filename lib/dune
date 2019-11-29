@@ -1,4 +1,4 @@
 (library
  (name webmachine)
  (public_name webmachine)
- (libraries cohttp httpaf dispatch re re.str uri ptime))
+ (libraries httpadapter dispatch re re.str uri ptime))
