@@ -1,4 +1,4 @@
 (tests
- (libraries webmachine oUnit)
+ (libraries webmachine oUnit http.cohttp)
  (modules test_dispatch test_logic)
  (names test_dispatch test_logic))

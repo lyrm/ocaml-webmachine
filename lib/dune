@@ -1,4 +1,4 @@
 (library
  (name webmachine)
  (public_name webmachine)
- (libraries httpadapter dispatch re re.str uri ptime))
+ (libraries http dispatch re re.str uri ptime))

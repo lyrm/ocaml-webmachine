@@ -52,7 +52,7 @@ end
 
 let run = Id.run
 
-open Cohttp
+open Http
 
 let http_1_0_methods = [`GET; `POST; `HEAD]
 let http_1_1_methods =
@@ -435,7 +435,7 @@ let with_test_resource' f =
 
 let assert_status ~msg (status_code, _, _, _) status =
   assert_equal ~msg ~printer:string_of_int
-    status Code.(code_of_status status_code)
+    status Status.(to_code status_code)
 ;;
 
 let assert_path ~msg (_, _, _, p1) p2 =

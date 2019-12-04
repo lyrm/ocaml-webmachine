@@ -31,7 +31,7 @@
     POSSIBILITY OF SUCH DAMAGE.
   ----------------------------------------------------------------------------*)
 
-open Httpadapter.HttpCohttp.HttpCohttp
+open Http
 
 module Util = Wm_util
 
